@@ -9,23 +9,14 @@ import asyncio
 from dotenv import load_dotenv
 
 load_dotenv()
-RAPIDAPI_KEY = os.getenv("RAPIDAPI_KEY")
 CONFIG_FILE = "like_channels.json"
 
 class LikeCommands(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        self.api_host = "https://free-fire-like1.p.rapidapi.com"
         self.config_data = self.load_config()
         self.cooldowns = {}
         self.session = aiohttp.ClientSession()
-
-        self.headers = {}
-        if RAPIDAPI_KEY:
-            self.headers = {
-                'x-rapidapi-key': RAPIDAPI_KEY,
-                'x-rapidapi-host': "free-fire-like1.p.rapidapi.com"
-            }
 
     def load_config(self):
         default_config = {
@@ -83,8 +74,8 @@ class LikeCommands(commands.Cog):
             await ctx.send(f"✅ Channel {channel.mention} is now **allowed** for /like commands. The command will **only** work in specified channels if any are set.", ephemeral=True)
 
     @commands.hybrid_command(name="like", description="Sends likes to a Free Fire player")
-    @app_commands.describe(uid="Player UID (numbers only, minimum 6 characters)")
-    async def like_command(self, ctx: commands.Context, uid: str):
+    @app_commands.describe(uid="Player UID (min 6 digits)", server_name="Server region (e.g., bd, sg, ind)")
+    async def like_command(self, ctx: commands.Context, uid: str, server_name: str):
         is_slash = ctx.interaction is not None
 
         if not await self.check_channel(ctx):
@@ -99,25 +90,30 @@ class LikeCommands(commands.Cog):
         cooldown = 30
         if user_id in self.cooldowns:
             last_used = self.cooldowns[user_id]
-            remaining = cooldown - (datetime.now() - last_used).seconds
+            remaining = cooldown - (datetime.now() - last_used).total_seconds()
             if remaining > 0:
-                await ctx.send(f"Please wait {remaining} seconds before using this command again.", ephemeral=is_slash)
+                await ctx.send(f"Please wait {int(remaining)} seconds before using this command again.", ephemeral=is_slash)
                 return
         self.cooldowns[user_id] = datetime.now()
 
         if not uid.isdigit() or len(uid) < 6:
-            await ctx.reply("Invalid UID. It must contain only numbers and be at least 6 characters long.", mention_author=False, ephemeral=is_slash)
+            if is_slash:
+                await ctx.response.send_message("❌ Invalid UID. It must be at least 6 digits.", ephemeral=True)
+            else:
+                await ctx.reply("❌ Invalid UID. It must be at least 6 digits.", mention_author=False)
             return
 
+        url = f"http://ghost-modx-free-v1.vercel.app/like?uid={uid}&server_name={server_name}&key=ghost_modx"
 
         try:
             async with ctx.typing():
-                async with self.session.get(f"{self.api_host}/like?uid={uid}", headers=self.headers) as response:
+                async with self.session.get(url) as response:
                     if response.status == 404:
                         await self._send_player_not_found(ctx, uid)
                         return
-                    if response.status ==429 :
-                        await self._send_api_limit_reached
+                    if response.status == 429:
+                        await self._send_api_limit_reached(ctx)
+                        return
                     if response.status != 200:
                         print(f"API Error: {response.status} - {await response.text()}")
                         await self._send_api_error(ctx)
@@ -158,24 +154,22 @@ class LikeCommands(commands.Cog):
         embed = discord.Embed(title="❌ Player Not Found", description=f"The UID {uid} does not exist or is not accessible.", color=0xE74C3C)
         embed.add_field(name="Tip", value="Make sure that:\n- The UID is correct\n- The player is not private", inline=False)
         await ctx.send(embed=embed, ephemeral=True)
-        
+
     async def _send_api_limit_reached(self, ctx):
         embed = discord.Embed(
             title="⚠️ API Rate Limit Reached",
             description="You have reached the maximum number of requests allowed by the API.",
-            color=0xF1C40F  # jaune/orangé
+            color=0xF1C40F
         )
         embed.add_field(
             name="Tip",
             value=(
                 "- Wait a few minutes before trying again\n"
-                "- Consider upgrading your API plan if this happens often\n"
                 "- Avoid sending too many requests in a short time"
             ),
             inline=False
         )
         await ctx.send(embed=embed, ephemeral=True)
-
 
     async def _send_api_error(self, ctx):
         embed = discord.Embed(title="⚠️ Service Unavailable", description="The Free Fire API is not responding at the moment.", color=0xF39C12)
